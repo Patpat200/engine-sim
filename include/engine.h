@@ -63,6 +63,10 @@ class Engine : public Part {
         virtual double getThrottlePlateAngle() const;
         virtual void calculateDisplacement();
         double getDisplacement() const { return m_displacement; }
+        double getBlockTemperature() const { return m_blockTemperature; }
+        double getOilTemperature() const { return m_oilTemperature; }
+        void addBlockHeat(double energy) { m_blockHeat += energy; }
+        void addOilHeat(double energy) { m_oilHeat += energy; }
         virtual double getIntakeFlowRate() const;
         virtual void update(double dt);
 
@@ -149,6 +153,14 @@ class Engine : public Part {
 
         double m_throttleValue;
         double m_displacement;
+
+    private:
+        void updateTemperatures(double dt);
+
+        double m_blockTemperature = units::celcius(25.0);
+        double m_oilTemperature = units::celcius(25.0);
+        double m_blockHeat = 0.0;
+        double m_oilHeat = 0.0;
 };
 
 #endif /* ATG_ENGINE_SIM_ENGINE_H */

@@ -9,6 +9,7 @@
 #include "../include/cylinder_bank.h"
 #include "../include/engine.h"
 
+#include <algorithm>
 #include <cmath>
 
 CombustionChamber::CombustionChamber() {
@@ -50,6 +51,10 @@ void CombustionChamber::initialize(const Parameters &params) {
     m_fuel = params.Fuel;
     m_crankcasePressure = params.CrankcasePressure;
     m_meanPistonSpeedToTurbulence = params.MeanPistonSpeedToTurbulence;
+    m_pistonTemperature = units::celcius(25.0);
+    m_pistonHeat = 0.0;
+    m_ringWear = 0.0;
+    m_wornRingLeak = GasSystem::k_28inH2O(5.0);
 
     m_pistonSpeed = new double[StateSamples];
     m_pressure = new double[StateSamples];
@@ -227,26 +232,74 @@ void CombustionChamber::update(double dt) {
     m_system.setVolume(getVolume());
 
     updateCycleStates();
+    updatePistonCondition(dt);
 
     m_intakeFlowRate = m_head->intakeFlowRate(m_piston->getCylinderIndex());
     m_exhaustFlowRate = m_head->exhaustFlowRate(m_piston->getCylinderIndex());
 }
 
+void CombustionChamber::updatePistonCondition(double dt) {
+    constexpr double pistonHeatCapacity = 270.0; // J/K
+    constexpr double pistonToOilConductance = 5.0; // W/K
+    const double oilTemperature =
+        m_engine != nullptr ? m_engine->getOilTemperature() : units::celcius(25.0);
+    const double heatToOil =
+        pistonToOilConductance * (m_pistonTemperature - oilTemperature) * dt;
+    m_pistonTemperature += (m_pistonHeat - heatToOil) / pistonHeatCapacity;
+    m_pistonHeat = 0.0;
+    if (m_engine != nullptr) {
+        m_engine->addOilHeat(heatToOil);
+    }
+
+    // Wear follows sliding distance and cylinder pressure. Cold oil and high
+    // piston temperatures accelerate it. The rate is a gameplay estimate.
+    const double slidingSpeed = std::fabs(pistonSpeed());
+    const double pressureLoad = std::clamp(
+        (m_system.pressure() - m_crankcasePressure) / (4.0 * units::MPa), 0.0, 2.0);
+    const double coldOil = std::clamp(
+        (units::celcius(70.0) - oilTemperature) / 45.0, 0.0, 1.0);
+    const double hotPiston = std::clamp(
+        (m_pistonTemperature - units::celcius(220.0)) / 100.0, 0.0, 3.0);
+    const double wearRate = 8e-7 * (slidingSpeed / (10.0 * units::m / units::sec))
+        * (0.15 + pressureLoad) * (1.0 + coldOil + 3.0 * hotPiston);
+    m_ringWear = std::fmin(m_ringWear + wearRate * dt, 1.0);
+}
+
 void CombustionChamber::flow(double dt) {
-    if (m_system.temperature() > m_peakTemperature) {
-        m_peakTemperature = m_system.temperature();
+    const double gasTemperature = m_system.temperature();
+    if (gasTemperature > m_peakTemperature) {
+        m_peakTemperature = gasTemperature;
     }
 
     const double volume = getVolume();
     const double cylinderHeight = volume / m_cylinderCrossSectionSurfaceArea;
-    const double cylinderSurfaceArea =
+    const double blockSurfaceArea =
         cylinderHeight * constants::pi * m_head->getCylinderBank()->getBore()
-        + m_cylinderCrossSectionSurfaceArea * 2;
+        + m_cylinderCrossSectionSurfaceArea;
+    const double blockTemperature =
+        m_engine != nullptr ? m_engine->getBlockTemperature() : units::celcius(25.0);
+    constexpr double gasConductance = 100.0; // W/(m^2 K)
 
-    const double dT = units::celcius(90.0) - m_system.temperature();
+    if (gasTemperature > 0.0 && std::isfinite(gasTemperature)) {
+        const double heatToBlock =
+            gasConductance * blockSurfaceArea * (gasTemperature - blockTemperature) * dt;
+        const double heatToPiston = gasConductance * m_cylinderCrossSectionSurfaceArea
+            * (gasTemperature - m_pistonTemperature) * dt;
+        const double heatLeavingGas = heatToBlock + heatToPiston;
+        const double scale = heatLeavingGas > 0.0
+            ? std::fmin(1.0, 0.5 * m_system.kineticEnergy() / heatLeavingGas)
+            : 1.0;
 
-    m_system.changeEnergy(dT * cylinderSurfaceArea * 100 * dt);
-    m_system.flow(m_piston->getBlowbyK(), dt, m_crankcasePressure, units::celcius(25.0));
+        m_system.changeEnergy(-heatLeavingGas * scale);
+        m_pistonHeat += heatToPiston * scale;
+        if (m_engine != nullptr) {
+            m_engine->addBlockHeat(heatToBlock * scale);
+        }
+    }
+
+    // Keep the script's original blow-by and add a leakage path as rings wear.
+    const double blowby = m_piston->getBlowbyK() + m_ringWear * m_wornRingLeak;
+    m_system.flow(blowby, dt, m_crankcasePressure, units::celcius(25.0));
 
     Intake *intake = m_head->getIntake(m_piston->getCylinderIndex());
     ExhaustSystem *exhaust = m_head->getExhaustSystem(m_piston->getCylinderIndex());

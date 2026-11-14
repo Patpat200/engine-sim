@@ -1,4 +1,3 @@
-#include "..\include\engine.h"
 #include "../include/engine.h"
 
 #include "../include/constants.h"
@@ -54,6 +53,11 @@ Engine::~Engine() {
 }
 
 void Engine::initialize(const Parameters &params) {
+    m_blockTemperature = units::celcius(25.0);
+    m_oilTemperature = units::celcius(25.0);
+    m_blockHeat = 0.0;
+    m_oilHeat = 0.0;
+
     m_crankshaftCount = params.crankshaftCount;
     m_cylinderCount = params.cylinderCount;
     m_cylinderBankCount = params.cylinderBanks;
@@ -300,6 +304,22 @@ double Engine::getIntakeFlowRate() const {
 
 void Engine::update(double dt) {
     m_throttle->update(dt, this);
+    updateTemperatures(dt);
+}
+
+void Engine::updateTemperatures(double dt) {
+    // Approximate thermal capacities in J/K and conductances in W/K.
+    constexpr double ambient = units::celcius(25.0);
+    constexpr double thermostat = units::celcius(90.0);
+    const double blockToOil = 24.0 * (m_blockTemperature - m_oilTemperature);
+    const double blockCooling = 7.0 * (m_blockTemperature - ambient)
+        + 75.0 * std::fmax(m_blockTemperature - thermostat, 0.0);
+    const double oilCooling = 4.0 * (m_oilTemperature - ambient);
+
+    m_blockTemperature += (m_blockHeat - (blockToOil + blockCooling) * dt) / 16000.0;
+    m_oilTemperature += (m_oilHeat + (blockToOil - oilCooling) * dt) / 6500.0;
+    m_blockHeat = 0.0;
+    m_oilHeat = 0.0;
 }
 
 double Engine::getManifoldPressure() const {

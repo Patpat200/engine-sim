@@ -6,6 +6,7 @@
 #include "../include/engine_sim_application.h"
 
 #include <cmath>
+#include <iomanip>
 #include <sstream>
 
 RightGaugeCluster::RightGaugeCluster() {
@@ -221,7 +222,40 @@ void RightGaugeCluster::renderTachSpeedCluster(const Bounds &bounds) {
         : (float)units::convert(std::abs(getSpeed()), units::km / units::hour);
 
 
-    m_combusionChamberStatus->m_bounds = right;
+    const Bounds condition = right.verticalSplit(0.0f, 0.36f);
+    m_combusionChamberStatus->m_bounds = right.verticalSplit(0.36f, 1.0f);
+    drawFrame(condition, 1.0f, m_app->getForegroundColor(), m_app->getBackgroundColor());
+
+    const Grid conditionGrid = { 1, 5 };
+    const float textSize = std::fmin(16.0f,
+        std::fmin(condition.height() / 6.0f, condition.width() / 13.0f));
+    drawCenteredText("ENGINE CONDITION", conditionGrid.get(condition, 0, 0),
+        textSize, Bounds::center);
+
+    if (m_engine == nullptr || m_engine->getCylinderCount() == 0) {
+        return;
+    }
+
+    double hottestPiston = m_engine->getChamber(0)->getPistonTemperature();
+    double mostWornRing = 0.0;
+    for (int i = 0; i < m_engine->getCylinderCount(); ++i) {
+        const CombustionChamber *chamber = m_engine->getChamber(i);
+        hottestPiston = std::fmax(hottestPiston, chamber->getPistonTemperature());
+        mostWornRing = std::fmax(mostWornRing, chamber->getRingWear());
+    }
+
+    const auto drawReading = [&](int row, const char *label, double value,
+                                 int precision, const char *unit) {
+        std::ostringstream reading;
+        reading << label << " " << std::fixed << std::setprecision(precision)
+                << value << unit;
+        drawCenteredText(reading.str(), conditionGrid.get(condition, 0, row),
+            textSize, Bounds::center);
+    };
+    drawReading(1, "BLOCK", m_engine->getBlockTemperature() - units::K0, 0, " C");
+    drawReading(2, "OIL", m_engine->getOilTemperature() - units::K0, 0, " C");
+    drawReading(3, "PISTON MAX", hottestPiston - units::K0, 0, " C");
+    drawReading(4, "RING WEAR", 100.0 * mostWornRing, 3, "%");
 }
 
 void RightGaugeCluster::renderFuelAirCluster(const Bounds &bounds) {

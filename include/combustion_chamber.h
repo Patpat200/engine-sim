@@ -54,6 +54,8 @@ class CombustionChamber : public atg_scs::ForceGenerator {
 
         CylinderHead *getCylinderHead() const { return m_head; }
         Piston *getPiston() const { return m_piston; }
+        double getPistonTemperature() const { return m_pistonTemperature; }
+        double getRingWear() const { return m_ringWear; }
 
         double getFrictionForce() const;
         double getVolume() const;
@@ -91,6 +93,7 @@ class CombustionChamber : public atg_scs::ForceGenerator {
         double m_nBurntFuel;
 
     protected:
+        void updatePistonCondition(double dt);
         double calculateFrictionForce(double v) const;
         void updateCycleStates();
 
@@ -107,6 +110,10 @@ class CombustionChamber : public atg_scs::ForceGenerator {
         double m_exhaustFlow;
 
         double m_crankcasePressure;
+        double m_pistonTemperature = units::celcius(25.0);
+        double m_pistonHeat = 0.0;
+        double m_ringWear = 0.0;
+        double m_wornRingLeak = 0.0;
 
         double *m_pressure;
         double *m_pistonSpeed;
